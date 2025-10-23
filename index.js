@@ -9,7 +9,7 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 const allowedOrigins = [
-    'localhost:3000',
+    'http://localhost:5173',
     'https://flashtasks.app',
     'https://www.flashtasks.app'
 ];
