@@ -103,15 +103,6 @@ app.post('/api/search', async (req, res) => {
 // Indexing webhook endpoint
 app.post('/api/index', async (req, res) => {
   try {
-    // Optional webhook secret check
-    const expectedSecret = process.env.WEBHOOK_SECRET;
-    if (expectedSecret) {
-      const headerSecret = req.headers['x-webhook-secret'] || req.headers['x-webhook-token'];
-      if (headerSecret !== expectedSecret) {
-        return res.status(401).json({ ok: false, error: 'unauthorized' });
-      }
-    }
-
     // Appwrite can send event info via headers or body depending on integration
     const headerEvent = req.headers['x-appwrite-event'] || req.headers['x-appwrite-webhook-event'];
     const bodyEvent = req.body?.event || req.body?.events || req.body?.type;
