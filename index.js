@@ -245,23 +245,25 @@ app.post('/api/search', async (req, res) => {
       return { match: { [fallbackField || fieldBase]: userEmail } };
     };
 
+    // Build visibility filters per-index (don't rely on docType field since older
+    // documents might not have it). Use _index to scope the visibility filter.
     const userFilters = {
       bool: {
         should: [
-          // tasks
+          // tasks: require matching userEmail in tasks index
           {
             bool: {
               must: [
-                { term: { docType: 'tasks' } },
+                { term: { _index: 'tasks' } },
                 termOrMatch('userEmail', 'tasks', 'userEmail')
               ]
             }
           },
-          // organizations (check members.email)
+          // organizations: require member email in organizations index
           {
             bool: {
               must: [
-                { term: { docType: 'organizations' } },
+                { term: { _index: 'organizations' } },
                 termOrMatch('members.email', 'organizations', 'members.email')
               ]
             }
@@ -283,7 +285,7 @@ app.post('/api/search', async (req, res) => {
                   query: String(query),
                   type: 'bool_prefix',
                   fields: fieldsToSearch,
-                  operator: 'and'
+                  operator: 'or'
                 }
               }
             ],
@@ -298,7 +300,30 @@ app.post('/api/search', async (req, res) => {
 
     const result = await esClient.search(esQuery);
     const hits = result.hits?.hits || [];
-    console.debug('ES hits count:', hits.length);
+    console.debug('ES hits count:', hits.length, 'took(ms):', result.took);
+
+    // If debug flag requested, also run an unfiltered search to show what the
+    // text query returns without the userEmail visibility filter. This helps
+    // diagnose whether the userEmail filter is excluding matching docs.
+    const debug = req.body?.debug === true || req.query?.debug === 'true';
+    let unfiltered = null;
+    if (debug) {
+      const unfilteredQuery = { ...esQuery };
+      // remove filters
+      if (unfilteredQuery.body && unfilteredQuery.body.query && unfilteredQuery.body.query.bool) {
+        unfilteredQuery.body.query.bool.filter = [];
+      }
+      console.debug('ES unfiltered search body:', JSON.stringify(unfilteredQuery.body, null, 2));
+      const r2 = await esClient.search(unfilteredQuery);
+      const hits2 = r2.hits?.hits || [];
+      unfiltered = {
+        took: r2.took,
+        total: r2.hits?.total || null,
+        count: hits2.length,
+        sample: hits2.slice(0, 5).map((h) => ({ $id: h._id, _index: h._index, _score: h._score, ...(h._source || {}) }))
+      };
+    }
+
     const items = hits.map((h) => ({
       $id: h._id,
       _index: h._index,
@@ -306,7 +331,9 @@ app.post('/api/search', async (req, res) => {
       ...(h._source || {})
     }));
 
-    res.json({ results: items });
+    const resp = { results: items };
+    if (debug) resp.debug = { filtered: { took: result.took, total: result.hits?.total || null, count: items.length }, unfiltered };
+    res.json(resp);
   } catch (err) {
     console.error('Search error:', err);
     res.status(500).json({ results: [], error: 'search_failed' });
