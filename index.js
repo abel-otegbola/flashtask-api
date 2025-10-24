@@ -362,6 +362,61 @@ app.get('/api/mappings', async (req, res) => {
   }
 });
 
+app.post('/api/tasks-per-day', async (req, res) => {
+  try {
+    const { orgId, days = 30 } = req.body || {};
+    const now = new Date();
+    const from = new Date(now.getTime() - (Number(days) * 24 * 60 * 60 * 1000));
+
+    // Try using $createdAt first (your docs use $createdAt), fall back to createdAt
+    const tryField = async (fieldName) => {
+      const body = {
+        size: 0,
+        query: {
+          bool: {
+            filter: [
+              { range: { [fieldName]: { gte: from.toISOString(), lte: now.toISOString() } } }
+            ]
+          }
+        },
+        aggs: {
+          per_day: {
+            date_histogram: {
+              field: fieldName,
+              calendar_interval: 'day',
+              min_doc_count: 0,
+              extended_bounds: { min: from.toISOString(), max: now.toISOString() }
+            }
+          }
+        }
+      };
+
+      if (orgId) body.query.bool.filter.push({ term: { organizationId: orgId } });
+
+      const indexName = 'tasks';
+      const resp = await esClient.search({ index: indexName, body }).catch((e) => { throw e; });
+      const aggs = resp?.body?.aggregations || resp?.aggregations || {};
+      const buckets = aggs.per_day?.buckets || [];
+      return { buckets, resp };
+    };
+
+    // first try $createdAt then createdAt
+    let r = await tryField('$createdAt').catch(() => ({ buckets: [] }));
+    if (!r.buckets || r.buckets.length === 0) {
+      r = await tryField('createdAt').catch(() => ({ buckets: [] }));
+    }
+
+    const buckets = r.buckets || [];
+    const result = buckets.map(b => ({ date: b.key_as_string || new Date(b.key).toISOString(), count: b.doc_count }));
+    return res.json({ buckets: result });
+  } catch (err) {
+    console.error('metrics/tasks-per-day error', err);
+    // If it's an ES error, include some detail carefully
+    const detail = err?.body || err?.message || String(err);
+    return res.status(500).json({ error: 'metrics query failed', detail });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`🚀 Backend running on http://localhost:${PORT}`);
 });
